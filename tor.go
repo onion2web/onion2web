@@ -8,8 +8,7 @@ import (
 	"net"
 	"time"
 )
-const TorSocksAddr = "127.0.0.1:9050"
-//const TorSocksAddr = "127.0.0.1:9150"
+var TorSocksAddr = "127.0.0.1:9050"
 
 func TorDial(onions []string, port int) (conn net.Conn) {
 	if onions == nil {

@@ -17,7 +17,13 @@ var HttpBufPool = MakeBufPool(5, HttpBufSize)
 // so as to avoid GC pressure. Same reason why the single buffer we do use is pooled.
 func HTTPHandle(conn net.Conn, errstr string, isdown string) {
 	mem := HttpBufPool.Get()
-	defer conn.Close()
+	var peer net.Conn
+	defer func() {
+		conn.Close()
+		if peer != nil {
+			peer.Close()
+		}
+	}()
 	defer HttpBufPool.Put(mem)
 	pos := 0
 	for pos < HttpBufSize {
@@ -35,7 +41,7 @@ func HTTPHandle(conn net.Conn, errstr string, isdown string) {
 					conn.Write([]byte(errstr))
 					return
 				}
-				peer := TorDial(target, 80)
+				peer = TorDial(target, 80)
 				if peer == nil {
 					conn.Write([]byte(isdown))
 					return

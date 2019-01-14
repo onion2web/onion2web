@@ -7,13 +7,6 @@ import (
 	"time"
 )
 
-const SNIWait = 30			// Waiting for initial packet bytes
-const SNIWait2 = 15			// Waiting for rest of the hello packet
-const ReadTimeout = 60		// Waiting for incoming bytes on a socket
-const LongReadTimeout = 700	// Allow long pauses after initial read on during pipe
-const WriteTimeout = 15		// For how long a single Write() can block
-const SocksDialTimeout = 30
-
 // Pass a TCP socket with incoming TLS session. Returns the consumed buffer (to be replayed at proxy endpoint)
 // and SNI name gleaned from the hello (or empty string if no SNI). If the stream is not valid TLS, ret=nil
 func SNIParse(conn net.Conn) (ret []byte, sni string) {
@@ -126,12 +119,8 @@ func SNIParse(conn net.Conn) (ret []byte, sni string) {
 	return frame, ""
 }
 
-// Generic SNI handler 	(for IRC and HTTPS).
-// - parse SNI from stream
-// - if SNI is not present, establish our own TLS session and print out errstr, close & return
-// - if SNI is present, invoke Tor dialer (which does all the resolving). If no suitable onion is found, errstr again
-// - if the dial succeeds, run a 2-way pipe
-func SNIHandle(conn net.Conn, port int, errstr string, isdown string) {
+// Generic SNI handler for straight TLS session protocols
+func SNIHandle(conn net.Conn, port int) {
 	defer conn.Close()
 	frame, sni := SNIParse(conn)
 	if frame == nil {
@@ -140,33 +129,14 @@ func SNIHandle(conn net.Conn, port int, errstr string, isdown string) {
 	conn.SetWriteDeadline(time.Now().Add(WriteTimeout * time.Second))
 	target := OnionResolve(sni)
 	if target == nil {
-		tc := TLSUpgrade(conn, SnakeTLS, frame)
-		if errstr != "" {
-			tc.Write([]byte(errstr))
-		}
-		tc.CloseWrite()
-		var b [1]byte
-		tc.Read(b[:])
-		time.Sleep(100 * time.Millisecond)
-		conn = tc
 		return
 	}
 	peer := TorDial(target, port)
 	if peer == nil {
-		tc := TLSUpgrade(conn, SnakeTLS, frame)
-		if isdown != "" {
-			tc.Write([]byte(isdown))
-		}
-		tc.CloseWrite()
-		var b [1]byte
-		tc.Read(b[:])
-		time.Sleep(100 * time.Millisecond)
-		conn = tc
 		return
 	} else {
 		peer.Write(frame)
 	}
 	IOPump(conn, peer)
-	// conn.Close early defer
 }
 

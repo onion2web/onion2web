@@ -3,39 +3,38 @@ package onion2web
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"log"
+	"math/big"
 	"net"
+	"time"
 )
 
+// Used only in certain edge cases, currently for opportunistic SMTP STARTLS.
+// Such sessions are MITMable regardless, but at least we can hide from passive onlookers.
 var SnakeTLS *tls.Config
 
-const snakeCert = `
------BEGIN CERTIFICATE-----
-MIIBJTCBzaADAgECAgEAMAoGCCqGSM49BAMCMAAwHhcNMTkwMTExMTgwMDU5WhcN
-MjkwMTA4MTgwMDU5WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEXPiZOUnr
-0PCHPU2Ow5iWF/o3j62UdpAyR5Oj+MFCyUDUdUc/i3JZDhIC+bY1PCheIAHCmnl2
-lDIfM5HO8yoJLKM4MDYwDgYDVR0PAQH/BAQDAgKkMBMGA1UdJQQMMAoGCCsGAQUF
-BwMBMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDRwAwRAIgPKz19+N/YJ4b
-77KaccUO9dzHopktAfTmRwMF1EjpaecCIBm9Bo/1QJtHjVcWA7FhjlmZ2ZeNai0S
-WH+LmZunWa9R
------END CERTIFICATE-----
-`
-
-const snakeKey = `
------BEGIN EC PRIVATE KEY-----
-MHcCAQEEIC6S8jxVI0Kvu3GWqp3Tj3Yeq0Ifit80ftljLeB/Ia0qoAoGCCqGSM49
-AwEHoUQDQgAEXPiZOUnr0PCHPU2Ow5iWF/o3j62UdpAyR5Oj+MFCyUDUdUc/i3JZ
-DhIC+bY1PCheIAHCmnl2lDIfM5HO8yoJLA==
------END EC PRIVATE KEY-----
-`
-
 func InitTLS() {
-	cert, err := tls.LoadX509KeyPair("cert.pem", "key.pem")
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	log.Println("Generating snake oil certificate for opportunistic TLS")
+	template := x509.Certificate {
+		SerialNumber: big.NewInt(0),
+		NotBefore: time.Now(),
+		NotAfter: time.Now().Add(10 * 365 * 24 * time.Hour),
+		KeyUsage: x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
 	if err != nil {
-		cert, err = tls.X509KeyPair([]byte(snakeCert), []byte(snakeKey))
-		if err != nil {
-			panic("Failed to load cert.pem & key.pem")
-		}
+		panic(err)
+	}
+	cert := tls.Certificate{
+		Certificate:[][]byte{der},
 	}
 	SnakeTLS = &tls.Config{Certificates: []tls.Certificate{cert}}
 }

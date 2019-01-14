@@ -12,7 +12,8 @@ import (
 const SMTPHostName = "mail.onion2web.com"
 const MandatoryTls = false
 
-func SMTPHandle(conn net.Conn) {
+// L4 proxy for SMTP, we figure out the backend by looking at SNI of STARTTLS, and RCPT TO: mx CNAME as a fallback.
+func SMTPHandle(conn net.Conn, dport int) {
 	var peer net.Conn
 	defer func() {
 		conn.Close()
