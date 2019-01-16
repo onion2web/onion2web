@@ -35,6 +35,7 @@ func InitTLS() {
 	}
 	cert := tls.Certificate{
 		Certificate:[][]byte{der},
+		PrivateKey: priv,
 	}
 	SnakeTLS = &tls.Config{Certificates: []tls.Certificate{cert}}
 }

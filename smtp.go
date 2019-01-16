@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"github.com/toorop/go-dkim"
+	"log"
 	"mime"
 	"net"
 	"net/mail"
@@ -22,6 +23,7 @@ const MandatoryTls = false
 const MaxBodySize = 1024 * 1024
 
 func SMTPHandle(conn net.Conn, dport int) {
+	log.Println("INCOMING")
 	var peer net.Conn
 	defer func() {
 		conn.Close()
@@ -271,12 +273,12 @@ func SMTPHandle(conn net.Conn, dport int) {
 			if (MandatoryTls && !hastls) {
 				break
 			}
-			if (!strings.HasPrefix(strings.ToUpper(mfrom), "MAIL FROM:")) {
-				send(501, "Malformed MAIL FROM:")
+			if (!strings.HasPrefix(strings.ToUpper(string(ln)), "MAIL FROM:")) {
+				send(501, "Malformed MAIL FROM:, got '"+mfrom+"'")
 				continue
 			}
 			var err error
-			mfa, err = mail.ParseAddress(string(args[10:]))
+			mfa, err = mail.ParseAddress(string(args[5:]))
 			if err != nil {
 				send(501, err.Error())
 				continue

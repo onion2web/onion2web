@@ -2,6 +2,7 @@ package onion2web
 
 import (
 	"bufio"
+	"log"
 	"net"
 	"strings"
 	"time"
@@ -15,7 +16,7 @@ func FTPHandle(conn net.Conn, dport int) {
 			peer.Close()
 		}
 	}()
-	conn.Write([]byte("220 onion2web.com FTP proxy. AUTH TLS mandatory." ))
+	conn.Write([]byte("220 onion2web.com FTP proxy. AUTH TLS mandatory.\r\n" ))
 	reader := bufio.NewReader(conn)
 	for {
 		conn.SetReadDeadline(time.Now().Add(ReadTimeout * time.Second))
@@ -31,25 +32,30 @@ func FTPHandle(conn net.Conn, dport int) {
 		if cmd != "AUTH TLS" {
 			conn.Write([]byte("500 Need AUTH TLS first.\r\n" ))
 		}
-		conn.Write([]byte(cmd + " successful\r\n"))
+		conn.Write([]byte("234 AUTH TLS ok\r\n"))
 		frame, sni := SNIParse(conn)
 		if frame == nil {
 			return
 		}
+		log.Println(sni)
+		//sni = "www.onion2web.com"
 		if sni == "" {
 			conn = TLSUpgrade(conn, SnakeTLS, frame)
-			conn.Write([]byte("550 Your FTP client is out of date. This server supports only AUTH TLS with SNI."))
+			conn.Write([]byte("550 Your FTP client is out of date. This server supports only AUTH TLS with SNI.\r\n"))
 			return
 		}
 		target := OnionResolve(sni)
+		log.Println(target)
 		if target != nil {
 			peer = TorDial(target, 21)
+			log.Print("dialed")
 			if peer != nil {
 				preader := bufio.NewReader(peer)
 				// skip banner
+				peer.SetReadDeadline(time.Now().Add(ReadTimeout * time.Second))
 				for {
-					peer.SetReadDeadline(time.Now().Add(ReadTimeout * time.Second))
 					ln, _, err := preader.ReadLine()
+					log.Println(string(ln))
 					if err != nil {
 						return
 					}
@@ -59,12 +65,14 @@ func FTPHandle(conn net.Conn, dport int) {
 					if ln[3] == ' ' {
 						break
 					}
-					_, err = peer.Write(frame)
-					if err != nil {
-						return
-					}
-					IOPump(conn, peer)
 				}
+				peer.Write([]byte("AUTH TLS\r\n"))
+				_, _, err := preader.ReadLine()
+				_, err = peer.Write(frame)
+				if err != nil {
+					return
+				}
+				IOPump(conn, peer)
 			}
 		}
 	}

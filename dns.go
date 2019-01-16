@@ -2,6 +2,7 @@
 package onion2web
 
 import (
+	"log"
 	"net"
 	"strings"
 )
@@ -21,10 +22,10 @@ func GetOnion(rec string) string {
 
 // First, pick up CNAME or TXT fallback. Returns nil if no mapping exists.
 func OnionResolve(domain string) (onions []string) {
-	//println("Resolving " + domain)
+	log.Println("Resolving " + domain)
 	cn, err := net.LookupCNAME(domain)
 	if err == nil {
-		//println(cn)
+		println(cn)
 		on := GetOnion(cn)
 		if on != "" {
 			return []string{on + ".onion"}
@@ -35,6 +36,7 @@ func OnionResolve(domain string) (onions []string) {
 		for _, cn := range cns {
 			on := GetOnion(cn)
 			if on != "" {
+				println(cn)
 				onions = append(onions, on + ".onion")
 			}
 		}

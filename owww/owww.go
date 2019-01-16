@@ -24,6 +24,7 @@ func main() {
 	extip := flag.String("extip", "auto", "External IP the ports are accessible on (far NAT)")
 	offset := flag.Int("offset", 0, "Offset bound port numbers (for NAT)")
 	silent := flag.Bool("silent", false, "Don't log to stdout")
+	dropuser := flag.String("user", "", "Drop privileges and switch to user after binding ports.")
 	socks := flag.String("socks", "127.0.0.1:9050", "Tor client socks host:port, 127.0.0.1:9150 for Tor browser")
 	flag.Parse()
 
@@ -41,13 +42,14 @@ func main() {
 		extparsed, err = net.ResolveIPAddr("ip4", *extip)
 	}
 
-	onion2web.TorSocksAddr = "socks5://" + *socks
-	_, err = url.Parse(onion2web.TorSocksAddr)
+	onion2web.TorSocksAddr = *socks
+	_, err = url.Parse("socks5://" + onion2web.TorSocksAddr)
 	if err != nil {
 		panic(err)
 	}
-	log.Printf("Using Tor instance at %s\n", onion2web.TorSocksAddr)
+	log.Println("Using Tor instance at", onion2web.TorSocksAddr)
 
+	bindmap := map[net.Listener]func(){}
 	bind := func(port, dport int, cb func (client net.Conn, dport int)) {
 		port += *offset
 		log.Printf("Bound %s:%d -> <HS>:%d\n", *bindip, port, dport)
@@ -55,7 +57,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		go func() {
+		bindmap[listener] = func() {
 			for {
 				fd, err := listener.Accept()
 				if err == nil {
@@ -64,7 +66,7 @@ func main() {
 					time.Sleep(1 * time.Second)
 				}
 			}
-		}()
+		}
 	}
 
 	// ALG proxies
@@ -103,6 +105,16 @@ func main() {
 		time.Sleep(100 * time.Millisecond)
 		fd.Close()
 	})
+
+	if (*dropuser != "") {
+		log.Println("Switching user to:", *dropuser)
+		onion2web.PrivDrop(*dropuser)
+	}
+
+	log.Println("Firing up bind handlers")
+	for _, v := range bindmap {
+		go v()
+	}
 
 	// Just sit and idle on IRC, and the tracker script will eventually discover us and publish in *.onion2web.com zone.
 	// The tracker can also pass a message if it detects something misconfigured.
@@ -148,7 +160,7 @@ func main() {
 					}()
 				}
 				if m.Command == "366" {
-					log.Printf("Connected. Proxy %s is now submitted to the tracker.\n", extip2.String())
+					log.Printf("Connected. Proxy %s is now observed by the tracker and will be added to the DNS pool in 5-30 minutes.\n", extip2.String())
 				}
 				if m.Command == "PRIVMSG" && !c.FromChannel(m) && auth[m.Name] {
 					log.Println(m.Trailing())
