@@ -14,6 +14,7 @@ import (
 	"net/mail"
 	"net/smtp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,6 +22,21 @@ const SMTPHostName = "mail.onion2web.com"
 const AllowRelay = true
 const MandatoryTls = false
 const MaxBodySize = 1024 * 1024
+
+var SMTPDomainQuota int = 50
+var SMTPQuotas = map[string]int{}
+var SMTPQuotasMutex = &sync.Mutex{}
+
+func SMTPInit() {
+	go func() {
+		time.Sleep(24 * time.Hour)
+		SMTPQuotasMutex.Lock()
+		for k := range SMTPQuotas {
+			SMTPQuotas[k] = 0
+		}
+		SMTPQuotasMutex.Unlock()
+	}()
+}
 
 func SMTPHandle(conn net.Conn, dport int) {
 	log.Println("INCOMING")
@@ -94,6 +110,7 @@ func SMTPHandle(conn net.Conn, dport int) {
 		var toolong bool
 		conn.SetReadDeadline(time.Now().Add(ReadTimeout * time.Second))
 		ln, toolong, readerr = reader.ReadLine()
+		log.Println(readerr)
 		if toolong || readerr != nil {
 			return nil
 		}
@@ -105,6 +122,7 @@ func SMTPHandle(conn net.Conn, dport int) {
 	sni := ""
 	args := ""
 	relaying := false
+	domain := ""
 	var dmxlist []*net.MX
 	var frame []byte
 	var mfa *mail.Address
@@ -133,7 +151,7 @@ func SMTPHandle(conn net.Conn, dport int) {
 			if (MandatoryTls && !hastls) {
 				break
 			}
-			send(352,"Go ahead. End your data with <CR><LF>.<CR><LF>")
+			send(354,"Go ahead. End your data with <CR><LF>.<CR><LF>")
 			var body []byte
 			for {
 				ln := recv()
@@ -147,6 +165,7 @@ func SMTPHandle(conn net.Conn, dport int) {
 					break
 				}
 				body = append(body, ln...)
+				body = append(body, 13, 10)
 				if len(body) > MaxBodySize {
 					send(552,"Message size exceeded.")
 					return
@@ -160,27 +179,30 @@ func SMTPHandle(conn net.Conn, dport int) {
 			for _, rmx = range dmxlist {
 				var err error
 				mxcli = nil
-				mxpeer, err = net.DialTimeout("tcp", rmx.Host + ":25", 5 * time.Second)
+				mxpeer, err = net.DialTimeout("tcp", rmx.Host + ":25", 15 * time.Second)
 				if err != nil {
+					log.Println(err)
 					continue
 				}
 				mxcli, err = smtp.NewClient(mxpeer, "smtp.onion2web.com")
 				if err == nil {
+					log.Println(err)
 					break
 				}
 				mxpeer.Close()
 			}
 
 			if mxcli == nil {
-				send(554, "Relay failed; no useable MX found")
+				send(454, "Unable to relay; recipient's server down or unreachable. Keep trying.")
 				continue
 			}
 
 			mxpeer.SetDeadline(time.Now().Add(ReadTimeout * time.Second))
+
 			if mxcli.StartTLS(&tls.Config{ServerName:rmx.Host}) != nil {
-				send(554, "Relay failed; " + rmx.Host + " TLS error")
-				mxcli.Close()
-				continue
+//				send(554, "Relay failed; " + rmx.Host + " TLS error")
+//				mxcli.Close()
+//				continue
 
 			}
 			msg, err := mail.ReadMessage(bytes.NewReader(body))
@@ -211,6 +233,16 @@ func SMTPHandle(conn net.Conn, dport int) {
 				continue
 			}
 
+			SMTPQuotasMutex.Lock()
+			currQuota := SMTPQuotas[domain]
+			SMTPQuotas[domain] = currQuota+1
+			SMTPQuotasMutex.Unlock()
+			if currQuota > SMTPDomainQuota {
+				send(450, "Over daily quota per domain. Try tomorrow.")
+				mxcli.Close()
+				continue
+			}
+
 			_, err = wdat.Write(body)
 			if err != nil || wdat.Close() != nil {
 				send(554, err.Error())
@@ -236,6 +268,7 @@ func SMTPHandle(conn net.Conn, dport int) {
 			return
 		}
 		case "STARTTLS": {
+			println("STARTTLS")
 			if hastls {
 				return
 			}
@@ -278,7 +311,7 @@ func SMTPHandle(conn net.Conn, dport int) {
 				continue
 			}
 			var err error
-			mfa, err = mail.ParseAddress(string(args[5:]))
+			mfa, err = mail.ParseAddress(strings.TrimSpace(string(args[5:])))
 			if err != nil {
 				send(501, err.Error())
 				continue
@@ -296,11 +329,12 @@ func SMTPHandle(conn net.Conn, dport int) {
 				send(503, "Need MAIL FROM: first")
 				continue
 			}
-			pa, err := mail.ParseAddress(string(args[3:]))
+			pa, err := mail.ParseAddress(strings.TrimSpace(string(args[3:])))
 			if err != nil {
 				send(501, err.Error())
 				continue
 			}
+
 			dmxlist, err = net.LookupMX(strings.Split(pa.Address, "@")[1])
 			if err != nil {
 				send(510, "DNS error "+ err.Error())
@@ -344,8 +378,9 @@ func SMTPHandle(conn net.Conn, dport int) {
 				continue
 			}
 			// This is a relay request.
-			if !canRelay(mfa.Address) {
-				send(454, "Relay access denied")
+			domain = strings.Split(mfa.Address, "@")[1]
+			if !canRelay(sni, domain) {
+				send(454, "Relay access temporarily unavailable")
 				continue
 			}
 			send(250, "Ok")
@@ -361,15 +396,42 @@ func SMTPHandle(conn net.Conn, dport int) {
 	}
 }
 
-func canRelay(addr string) (ok bool) {
-	mxlist, err := net.LookupMX(strings.Split(addr, "@")[1])
+func canRelay(sni string, domain string) (ok bool) {
+	// must be top level domain
+	parts := strings.Split(domain, ".")
+	if len(parts) != 2 {
+		return
+	}
+
+	// must have spf pointed at mx, with everything else removed
+	txts, err := net.LookupTXT(domain)
 	if err != nil {
 		return
 	}
-	for _, v := range mxlist {
-		if (!strings.HasSuffix(v.Host, ".onion2web.com.")) {
+	hasSpf := false
+	for _, v := range txts {
+		if v == "v=spf1 +mx -all" {
+			hasSpf = true
+		} else if strings.HasPrefix(v, "v=spf") {
 			return
 		}
 	}
-	return true
+	if !hasSpf {
+		return
+	}
+
+	// must have mx
+	mxlist, err := net.LookupMX(domain)
+	if err != nil || len(mxlist) == 0 {
+		return
+	}
+
+	// all mx records pointed at the pool
+	resolved := 0
+	for _, v := range mxlist {
+		if OnionResolve(v.Host) != nil {
+			resolved += 1
+		}
+	}
+	return resolved == len(mxlist)
 }

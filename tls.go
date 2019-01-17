@@ -3,9 +3,8 @@ package onion2web
 
 import (
 	"bytes"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"log"
@@ -19,7 +18,8 @@ import (
 var SnakeTLS *tls.Config
 
 func InitTLS() {
-	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	//priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	priv, _ := rsa.GenerateKey(rand.Reader, 2048)
 	log.Println("Generating snake oil certificate for opportunistic TLS")
 	template := x509.Certificate {
 		SerialNumber: big.NewInt(0),

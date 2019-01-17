@@ -43,3 +43,4 @@ func OnionResolve(domain string) (onions []string) {
 	}
 	return
 }
+
